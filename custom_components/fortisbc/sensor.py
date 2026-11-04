@@ -22,40 +22,57 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up FortisBC sensors."""
+    """Set up FortisBC sensors.
+
+    Gas sensors are always created (unknown until data arrives). Electric
+    sensors are added as soon as account data is available — including on a
+    later successful poll if the first fetch failed (e.g. portal maintenance),
+    instead of never appearing until a restart.
+    """
     coordinator: FortisbcCoordinator = hass.data[DOMAIN][entry.entry_id]
-    entities = []
+    eid = entry.entry_id
 
-    data = coordinator.data or {}
+    async_add_entities([
+        FortisbcGasUsageSensor(coordinator, eid),
+        FortisbcGasM3Sensor(coordinator, eid),
+        FortisbcGasCostSensor(coordinator, eid),
+        FortisbcGasRateSensor(coordinator, eid),
+    ])
 
-    # Gas sensors
-    if data.get("gas"):
-        entities.append(FortisbcGasUsageSensor(coordinator))
-        entities.append(FortisbcGasM3Sensor(coordinator))
-        entities.append(FortisbcGasCostSensor(coordinator))
-        entities.append(FortisbcGasRateSensor(coordinator))
+    added: set[int] = set()
 
-    # Electric sensors — one usage + one cost + one rate per SA
-    for i, acct in enumerate(data.get("electric", [])):
-        label = acct.premise_address or f"Electric {i + 1}"
-        entities.append(FortisbcElectricUsageSensor(coordinator, i, label))
-        entities.append(FortisbcElectricCostSensor(coordinator, i, label))
-        entities.append(FortisbcElectricRateSensor(coordinator, i, label))
+    def _add_electric() -> None:
+        data = coordinator.data or {}
+        new = []
+        for i, acct in enumerate(data.get("electric", [])):
+            if i in added:
+                continue
+            added.add(i)
+            label = acct.premise_address or f"Electric {i + 1}"
+            new.extend([
+                FortisbcElectricUsageSensor(coordinator, eid, i, label),
+                FortisbcElectricCostSensor(coordinator, eid, i, label),
+                FortisbcElectricRateSensor(coordinator, eid, i, label),
+            ])
+        if new:
+            async_add_entities(new)
 
-    async_add_entities(entities)
+    _add_electric()
+    coordinator.async_add_listener(_add_electric)
 
 
 class _FortisbcBase(CoordinatorEntity):
     """Base class for FortisBC sensors."""
 
-    def __init__(self, coordinator: FortisbcCoordinator, unique_suffix: str) -> None:
+    def __init__(self, coordinator: FortisbcCoordinator, unique_suffix: str, entry_id: str) -> None:
         super().__init__(coordinator)
-        self._attr_unique_id = f"fortisbc_{unique_suffix}"
+        self._entry_id = entry_id
+        self._attr_unique_id = f"fortisbc_{entry_id}_{unique_suffix}"
 
     @property
     def device_info(self):
         return {
-            "identifiers": {(DOMAIN, "fortisbc")},
+            "identifiers": {(DOMAIN, self._entry_id)},
             "name": "FortisBC",
             "manufacturer": "FortisBC",
         }
@@ -68,8 +85,8 @@ class FortisbcElectricUsageSensor(_FortisbcBase, SensorEntity):
     _attr_state_class = SensorStateClass.TOTAL
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
 
-    def __init__(self, coordinator: FortisbcCoordinator, index: int, label: str) -> None:
-        super().__init__(coordinator, f"electric_{index}_kwh")
+    def __init__(self, coordinator: FortisbcCoordinator, entry_id: str, index: int, label: str) -> None:
+        super().__init__(coordinator, f"electric_{index}_kwh", entry_id)
         self._index = index
         self._attr_name = f"FortisBC Electric Usage ({label})"
 
@@ -118,8 +135,8 @@ class FortisbcElectricCostSensor(_FortisbcBase, SensorEntity):
     _attr_native_unit_of_measurement = "CAD"
     _attr_icon = "mdi:currency-usd"
 
-    def __init__(self, coordinator: FortisbcCoordinator, index: int, label: str) -> None:
-        super().__init__(coordinator, f"electric_{index}_cost")
+    def __init__(self, coordinator: FortisbcCoordinator, entry_id: str, index: int, label: str) -> None:
+        super().__init__(coordinator, f"electric_{index}_cost", entry_id)
         self._index = index
         self._attr_name = f"FortisBC Electric Cost ({label})"
 
@@ -168,8 +185,8 @@ class FortisbcGasUsageSensor(_FortisbcBase, SensorEntity):
     _attr_native_unit_of_measurement = "GJ"
     _attr_icon = "mdi:fire"
 
-    def __init__(self, coordinator: FortisbcCoordinator) -> None:
-        super().__init__(coordinator, "gas_gj")
+    def __init__(self, coordinator: FortisbcCoordinator, entry_id: str) -> None:
+        super().__init__(coordinator, "gas_gj", entry_id)
         self._attr_name = "FortisBC Gas Usage"
 
     @property
@@ -210,8 +227,8 @@ class FortisbcGasM3Sensor(_FortisbcBase, SensorEntity):
     _attr_native_unit_of_measurement = UnitOfVolume.CUBIC_METERS
     _attr_icon = "mdi:fire"
 
-    def __init__(self, coordinator: FortisbcCoordinator) -> None:
-        super().__init__(coordinator, "gas_m3")
+    def __init__(self, coordinator: FortisbcCoordinator, entry_id: str) -> None:
+        super().__init__(coordinator, "gas_m3", entry_id)
         self._attr_name = "FortisBC Gas Usage (m³)"
 
     @property
@@ -268,8 +285,8 @@ class FortisbcGasCostSensor(_FortisbcBase, SensorEntity):
     _attr_native_unit_of_measurement = "CAD"
     _attr_icon = "mdi:currency-usd"
 
-    def __init__(self, coordinator: FortisbcCoordinator) -> None:
-        super().__init__(coordinator, "gas_cost")
+    def __init__(self, coordinator: FortisbcCoordinator, entry_id: str) -> None:
+        super().__init__(coordinator, "gas_cost", entry_id)
         self._attr_name = "FortisBC Gas Cost"
 
     def _gas(self):
@@ -337,8 +354,8 @@ class FortisbcElectricRateSensor(_FortisbcBase, SensorEntity):
     _attr_icon = "mdi:currency-usd"
     _attr_suggested_display_precision = 4
 
-    def __init__(self, coordinator: FortisbcCoordinator, index: int, label: str) -> None:
-        super().__init__(coordinator, f"electric_{index}_rate")
+    def __init__(self, coordinator: FortisbcCoordinator, entry_id: str, index: int, label: str) -> None:
+        super().__init__(coordinator, f"electric_{index}_rate", entry_id)
         self._index = index
         self._attr_name = f"FortisBC Electric Rate ({label})"
 
@@ -380,8 +397,8 @@ class FortisbcGasRateSensor(_FortisbcBase, SensorEntity):
     _attr_icon = "mdi:currency-usd"
     _attr_suggested_display_precision = 4
 
-    def __init__(self, coordinator: FortisbcCoordinator) -> None:
-        super().__init__(coordinator, "gas_rate")
+    def __init__(self, coordinator: FortisbcCoordinator, entry_id: str) -> None:
+        super().__init__(coordinator, "gas_rate", entry_id)
         self._attr_name = "FortisBC Gas Rate"
 
     @property
