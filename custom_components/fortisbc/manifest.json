@@ -4,9 +4,11 @@
   "version": "0.1.0",
   "documentation": "https://github.com/toddzim33/ha-fortisbc",
   "issue_tracker": "https://github.com/toddzim33/ha-fortisbc/issues",
-  "codeowners": ["@toddzim33"],
+  "codeowners": [
+    "@toddzim33"
+  ],
   "requirements": [
-    "fortisbc @ git+https://github.com/toddzim33/fortisbc-py.git",
+    "fortisbc @ git+https://github.com/jobiniahclaw/fortisbc-py.git",
     "curl_cffi>=0.7",
     "beautifulsoup4>=4.12"
   ],
